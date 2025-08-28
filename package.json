@@ -1,0 +1,21 @@
+{
+  "name": "camera-feasibility-software",
+  "version": "1.0.0",
+  "description": "Software camera feasibility analysis by combining hardware cameras",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "scripts": {
+    "build": "tsc",
+    "start": "node dist/index.js",
+    "dev": "ts-node index.ts"
+  },
+  "author": "Mughees",
+  "devDependencies": {
+    "@types/node": "^20.0.0",
+    "ts-node": "^10.9.0",
+    "typescript": "^5.0.0"
+  },
+  "engines": {
+    "node": ">=16.0.0"
+  }
+}
