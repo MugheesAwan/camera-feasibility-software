@@ -1,26 +1,31 @@
-import { clipRange, getCoverageArea } from "./helpers";
-import { Coverage, HardwareCamera, CoverageEvent, Range } from "./types";
+import { Coverage, HardwareCamera, Range } from "./types";
 
 // Clip a coverage to target bounds
 function clipCoverage(
   camCoverage: Coverage,
   targetCoverage: Coverage
 ): Coverage | null {
-  const clippedDistanceRange = clipRange(
-    camCoverage.distanceRange,
-    targetCoverage.distanceRange
-  );
-  const clippedLightRange = clipRange(
-    camCoverage.lightRange,
-    targetCoverage.lightRange
-  );
+  const clippedDistanceRange = {
+    min: Math.max(
+      camCoverage.distanceRange.min,
+      targetCoverage.distanceRange.min
+    ),
+    max: Math.min(
+      camCoverage.distanceRange.max,
+      targetCoverage.distanceRange.max
+    ),
+  };
 
-  // Check if clipped coverage is valid
+  const clippedLightRange = {
+    min: Math.max(camCoverage.lightRange.min, targetCoverage.lightRange.min),
+    max: Math.min(camCoverage.lightRange.max, targetCoverage.lightRange.max),
+  };
+
   if (
     clippedDistanceRange.min >= clippedDistanceRange.max ||
     clippedLightRange.min >= clippedLightRange.max
   ) {
-    return null; // No intersection
+    return null;
   }
 
   return { distanceRange: clippedDistanceRange, lightRange: clippedLightRange };
@@ -30,120 +35,180 @@ function clipCoverage(
 function canConstructCamera(
   desiredCoverage: Coverage,
   hardwareCameras: HardwareCamera[]
-) {
-  if (hardwareCameras.length === 0)
-    return { canConstruct: false, coveragePercentage: 0 };
+): boolean {
+  if (hardwareCameras.length === 0) return false;
 
-  const targetArea = getCoverageArea(desiredCoverage);
-  const intersectionArea = calculateIntersectionArea(
-    desiredCoverage,
-    hardwareCameras.map((camera) => ({
-      distanceRange: camera.distanceRange,
-      lightRange: camera.lightRange,
-    }))
-  );
-
-  const coveragePercentage = (intersectionArea / targetArea) * 100;
-
-  return {
-    canConstruct: coveragePercentage === 100,
-    coveragePercentage,
-  };
-}
-
-// Calculate intersection area between target coverage and union of coverages using Sweep line algorithm
-function calculateIntersectionArea(
-  targetCoverage: Coverage,
-  coverageCameras: Coverage[]
-): number {
-  if (coverageCameras.length === 0) return 0;
-
-  const clippedCoverages = coverageCameras
-    .map((camera) => clipCoverage(camera, targetCoverage))
+  const clippedCoverages = hardwareCameras
+    .map((camera) => clipCoverage(camera, desiredCoverage))
     .filter(Boolean) as Coverage[];
 
-  return calculateUnionArea(clippedCoverages);
+  if (clippedCoverages.length === 0) return false;
+
+  return isCompletelyCovered(desiredCoverage, clippedCoverages);
 }
 
-// Calculate the area of union of clipped coverages using sweep line algorithm
-function calculateUnionArea(clippedCoverages: Coverage[]): number {
-  if (clippedCoverages.length === 0) return 0;
+function isCompletelyCovered(
+  targetCoverage: Coverage,
+  coverages: Coverage[]
+): boolean {
+  // Create events
+  const events: Array<{
+    x: number;
+    type: "start" | "end";
+    yMin: number;
+    yMax: number;
+  }> = [];
 
-  // Create events for sweep line
-  const events: CoverageEvent[] = clippedCoverages.flatMap((coverage) => [
-    {
-      x: coverage.distanceRange.min,
-      type: "start" as const,
-      yMin: coverage.lightRange.min,
-      yMax: coverage.lightRange.max,
-    },
-    {
-      x: coverage.distanceRange.max,
-      type: "end" as const,
-      yMin: coverage.lightRange.min,
-      yMax: coverage.lightRange.max,
-    },
-  ]);
+  for (const coverage of coverages) {
+    events.push(
+      {
+        x: coverage.distanceRange.min,
+        type: "start",
+        yMin: coverage.lightRange.min,
+        yMax: coverage.lightRange.max,
+      },
+      {
+        x: coverage.distanceRange.max,
+        type: "end",
+        yMin: coverage.lightRange.min,
+        yMax: coverage.lightRange.max,
+      }
+    );
+  }
 
-  // Sort events by x-coordinate
+  // Sort events by x
   events.sort((a, b) => a.x - b.x);
 
-  const activeIntervals: Range[] = [];
-  let totalArea = 0;
+  const intervalTree = new IntervalTree();
+
   let lastX = events[0]?.x || 0;
 
   for (const event of events) {
-    // Calculate area contribution from last x to current x
-    if (activeIntervals.length > 0) {
-      const width = event.x - lastX;
-      const height = calculateActiveHeight(activeIntervals);
-      totalArea += width * height;
+    // Check coverage for the segment from lastX to current event.x
+    if (lastX < event.x) {
+      // Only check segments that are within the target distance range
+      const segmentMin = Math.max(lastX, targetCoverage.distanceRange.min);
+      const segmentMax = Math.min(event.x, targetCoverage.distanceRange.max);
+
+      if (segmentMin < segmentMax) {
+        // This segment is within the target range, must have coverage
+        if (intervalTree.size() === 0) {
+          return false;
+        }
+
+        const merged = intervalTree.getAllMerged();
+        if (!isRangeCoveredByIntervals(targetCoverage.lightRange, merged)) {
+          return false;
+        }
+      }
     }
 
     // Update active intervals
     if (event.type === "start") {
-      activeIntervals.push({ min: event.yMin, max: event.yMax });
+      intervalTree.insert({ min: event.yMin, max: event.yMax });
     } else {
-      // Removes the starting interval of the end event
-      removeInterval(activeIntervals, event.yMin, event.yMax);
+      intervalTree.remove({ min: event.yMin, max: event.yMax });
     }
 
     lastX = event.x;
   }
 
-  return totalArea;
+  // Final check to ensure we've covered the entire target distance range
+  const targetEnd = targetCoverage.distanceRange.max;
+  if (lastX < targetEnd) {
+    // Check if there's a gap at the end
+    if (intervalTree.size() === 0) {
+      return false;
+    }
+
+    const merged = intervalTree.getAllMerged();
+    if (!isRangeCoveredByIntervals(targetCoverage.lightRange, merged)) {
+      return false;
+    }
+  }
+  return true;
 }
 
-// Calculate total height of active intervals
-function calculateActiveHeight(intervals: Range[]): number {
-  if (intervals.length === 0) return 0;
+// Interval Tree implementation
+class IntervalTree {
+  private intervals: Range[] = [];
 
-  const sorted = [...intervals].sort((a, b) => a.min - b.min);
-  let totalHeight = 0;
-  let currentMin = sorted[0]!.min;
-  let currentMax = sorted[0]!.max;
+  insert(interval: Range): void {
+    // Insert interval in sorted order
+    let insertPos = 0;
+    for (let i = 0; i < this.intervals.length; i++) {
+      if (this.intervals[i]!.min <= interval.min) {
+        insertPos = i + 1;
+      } else {
+        break;
+      }
+    }
 
-  for (let i = 1; i < sorted.length; i++) {
-    const interval = sorted[i]!;
-    if (interval.min <= currentMax) {
-      currentMax = Math.max(currentMax, interval.max); // Extend current range in case of overlapping
-    } else {
-      totalHeight += currentMax - currentMin; // Add current range
-      currentMin = interval.min;
-      currentMax = interval.max;
+    this.intervals.splice(insertPos, 0, interval);
+  }
+
+  remove(interval: Range): void {
+    // Find and remove the exact interval
+    const index = this.intervals.findIndex(
+      (i) => i.min === interval.min && i.max === interval.max
+    );
+    if (index !== -1) {
+      this.intervals.splice(index, 1);
     }
   }
 
-  return totalHeight + (currentMax - currentMin); // Add the last interval
+  getAllMerged(): Range[] {
+    if (this.intervals.length === 0) return [];
+
+    // Merge overlapping intervals
+    const merged: Range[] = [];
+    let current = this.intervals[0]!;
+
+    for (let i = 1; i < this.intervals.length; i++) {
+      const next = this.intervals[i]!;
+      if (current.max >= next.min) {
+        // Merge current interval with next interval
+        current = { min: current.min, max: Math.max(current.max, next.max) };
+      } else {
+        // Save current interval and start new interval
+        merged.push(current);
+        current = next;
+      }
+    }
+
+    merged.push(current);
+    return merged;
+  }
+
+  size(): number {
+    return this.intervals.length;
+  }
 }
 
-// Remove an interval from active intervals
-function removeInterval(intervals: Range[], min: number, max: number): void {
-  const index = intervals.findIndex(
-    (interval) => interval.min === min && interval.max === max
-  );
-  if (index !== -1) intervals.splice(index, 1);
+// Check if a target range is completely covered by a set of intervals
+function isRangeCoveredByIntervals(
+  targetRange: Range,
+  intervals: Range[]
+): boolean {
+  if (intervals.length === 0) return false;
+  if (intervals[0]!.min > targetRange.min) return false;
+
+  let currentEnd = intervals[0]!.max;
+
+  for (let i = 1; i < intervals.length; i++) {
+    const interval = intervals[i]!;
+
+    if (interval.min > currentEnd) {
+      if (currentEnd >= targetRange.max) return true;
+      return false;
+    }
+
+    currentEnd = Math.max(currentEnd, interval.max);
+
+    if (currentEnd >= targetRange.max) return true;
+  }
+
+  return currentEnd >= targetRange.max;
 }
 
-// Export functions
 export { canConstructCamera };

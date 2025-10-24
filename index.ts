@@ -76,14 +76,7 @@ function runExamples() {
       "Hardware Cameras:",
       example.cameras.map((c) => c.id)
     );
-    console.log(
-      "Result:",
-      result.canConstruct ? "✅ CAN CONSTRUCT" : "❌ CANNOT CONSTRUCT"
-    );
-    console.log(
-      "Coverage Percentage:",
-      result.coveragePercentage.toFixed(2) + "%"
-    );
+    console.log("Result:", result ? "✅ CAN CONSTRUCT" : "❌ CANNOT CONSTRUCT");
   });
 }
 
