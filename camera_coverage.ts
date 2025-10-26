@@ -1,5 +1,21 @@
 import { Coverage, HardwareCamera, Range } from "./types";
 
+// Main function to check if hardware cameras can construct the software camera
+function canConstructCamera(
+  desiredCoverage: Coverage,
+  hardwareCameras: HardwareCamera[]
+): boolean {
+  if (hardwareCameras.length === 0) return false;
+
+  const clippedCoverages = hardwareCameras
+    .map((camera) => clipCoverage(camera, desiredCoverage))
+    .filter(Boolean) as Coverage[];
+
+  if (clippedCoverages.length === 0) return false;
+
+  return isCompletelyCovered(desiredCoverage, clippedCoverages);
+}
+
 // Clip a coverage to target bounds
 function clipCoverage(
   camCoverage: Coverage,
@@ -29,22 +45,6 @@ function clipCoverage(
   }
 
   return { distanceRange: clippedDistanceRange, lightRange: clippedLightRange };
-}
-
-// Main function to check if hardware cameras can construct the software camera
-function canConstructCamera(
-  desiredCoverage: Coverage,
-  hardwareCameras: HardwareCamera[]
-): boolean {
-  if (hardwareCameras.length === 0) return false;
-
-  const clippedCoverages = hardwareCameras
-    .map((camera) => clipCoverage(camera, desiredCoverage))
-    .filter(Boolean) as Coverage[];
-
-  if (clippedCoverages.length === 0) return false;
-
-  return isCompletelyCovered(desiredCoverage, clippedCoverages);
 }
 
 function isCompletelyCovered(
@@ -79,27 +79,26 @@ function isCompletelyCovered(
   // Sort events by x
   events.sort((a, b) => a.x - b.x);
 
+  // Check for distance gap at the start
+  const firstEventX = events[0]!.x;
+  if (firstEventX > targetCoverage.distanceRange.min) {
+    return false;
+  }
+
   const intervalTree = new IntervalTree();
 
-  let lastX = events[0]?.x || 0;
+  let lastX = events[0]!.x;
 
   for (const event of events) {
     // Check coverage for the segment from lastX to current event.x
     if (lastX < event.x) {
-      // Only check segments that are within the target distance range
-      const segmentMin = Math.max(lastX, targetCoverage.distanceRange.min);
-      const segmentMax = Math.min(event.x, targetCoverage.distanceRange.max);
+      if (intervalTree.size() === 0) {
+        return false;
+      }
 
-      if (segmentMin < segmentMax) {
-        // This segment is within the target range, must have coverage
-        if (intervalTree.size() === 0) {
-          return false;
-        }
-
-        const merged = intervalTree.getAllMerged();
-        if (!isRangeCoveredByIntervals(targetCoverage.lightRange, merged)) {
-          return false;
-        }
+      const merged = intervalTree.getAllMerged();
+      if (!isRangeCoveredByIntervals(targetCoverage.lightRange, merged)) {
+        return false;
       }
     }
 
@@ -113,7 +112,7 @@ function isCompletelyCovered(
     lastX = event.x;
   }
 
-  // Final check to ensure we've covered the entire target distance range
+  // Final check to ensure we've covered the entire target range
   const targetEnd = targetCoverage.distanceRange.max;
   if (lastX < targetEnd) {
     // Check if there's a gap at the end
