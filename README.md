@@ -4,7 +4,7 @@ A TypeScript application that analyzes whether a set of hardware cameras can pro
 
 ## What it does
 
-This software takes a target coverage area (defined by distance and light level ranges) and a list of available hardware cameras, then determines if the hardware cameras can provide complete coverage of the target area.
+This software takes a target coverage (defined by distance and light level ranges) and a list of available hardware cameras, then determines if the hardware cameras can provide complete coverage of the target area.
 
 ## How it works
 
